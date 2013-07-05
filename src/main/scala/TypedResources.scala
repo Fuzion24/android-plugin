@@ -3,6 +3,7 @@ package sbtandroid
 import sbt._
 import classpath._
 import scala.xml._
+import scala.util.Try
 
 import Keys._
 import AndroidPlugin._
@@ -16,13 +17,9 @@ object TypedResources {
         val Id = """@\+id/(.*)""".r
         val androidJarLoader = ClasspathUtilities.toLoader(libraryJarPath)
 
-        def tryLoading(className: String) = {
-          try {
-            Some(androidJarLoader.loadClass(className))
-          } catch {
-            case _ => None
-          }
-        }
+        def tryLoading(className: String):Option[Class[_]] =
+          Try{ androidJarLoader.loadClass(className) }.toOption
+
 
         val layouts: Set[String] = layoutResources.get.flatMap{ layout =>
           val Name = "(.*)\\.[^\\.]+".r
@@ -115,7 +112,7 @@ object TypedResources {
     typedResource <<= (manifestPackage, managedScalaPath) map {
       _.split('.').foldLeft(_) ((p, s) => p / s) / "TR.scala"
     },
-    layoutResources <<= (mainResPath) map { x=> (x * "layout*" * "*.xml" get) },
+    layoutResources <<= (mainResPath) map { x=> (x * "layout*" * "*.xml").get },
 
     generateTypedResources <<= generateTypedResourcesTask,
 
