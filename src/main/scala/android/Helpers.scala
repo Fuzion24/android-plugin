@@ -6,9 +6,7 @@ import Keys._
 import AndroidPlugin._
 
 object AndroidHelpers {
-
-  def directory(path: SettingKey[File]) = path map (IO.createDirectory(_))
-
+  
   /**
    * Finds out where the Android SDK is located on your system, based on :
    *   * Environment variables

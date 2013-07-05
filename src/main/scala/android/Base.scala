@@ -9,6 +9,7 @@ import AndroidPlugin._
 import AndroidHelpers._
 
 import sbinary.DefaultProtocol.StringFormat
+import android.builder.{AAPT, AIDL}
 
 object AndroidBase {
   def getNativeTarget(parent: File, name: String, abi: String) = {
@@ -79,60 +80,60 @@ object AndroidBase {
     (update, aarlibBaseDirectory, aarlibManaged, aarlibResourceManaged, resourceManaged, streams,
      unmanagedBase) map {
     (updateReport, aarlibBaseDirectory, aarlibManaged, aarlibResourceManaged, resManaged, s,
-     unmanagedBase) => {
+       unmanagedBase) => {
 
-      // We want to extract every aarlib in the classpath that is not already
-      // set to provided (which should mean that another project already
-      // provides the aarLib).
-      val allaarlibs = updateReport.matching(artifactFilter(`type` = "aar"))
-      val unmanagedaarlibs = Option(unmanagedBase.listFiles)
-                              .map(f => f.filter(_.name.endsWith(".aar")).toList)
-                              .getOrElse(Seq.empty)
-      val providedaarlibs = updateReport.matching(configurationFilter(name = "provided"))
-      val aarlibs = (allaarlibs --- providedaarlibs get) ++ unmanagedaarlibs
+        // We want to extract every aarlib in the classpath that is not already
+        // set to provided (which should mean that another project already
+        // provides the aarLib).
+        val allaarlibs = updateReport.matching(artifactFilter(`type` = "aar"))
+        val unmanagedaarlibs = Option(unmanagedBase.listFiles)
+                                .map(f => f.filter(_.name.endsWith(".aar")).toList)
+                                .getOrElse(Seq.empty)
+        val providedaarlibs = updateReport.matching(configurationFilter(name = "provided"))
+        val aarlibs = (allaarlibs --- providedaarlibs get) ++ unmanagedaarlibs
 
-      // Make the destination directories
-      aarlibBaseDirectory.mkdirs
-      aarlibManaged.mkdirs
-      aarlibResourceManaged.mkdirs
+        // Make the destination directories
+        aarlibBaseDirectory.mkdirs
+        aarlibManaged.mkdirs
+        aarlibResourceManaged.mkdirs
 
-      // Extract the aarLibs
-      aarlibs map { aarlib =>
+        // Extract the aarLibs
+        aarlibs map { aarlib =>
 
-        // Check if the AAR lib is up to date
-        val dest = aarlibResourceManaged / aarlib.base
-        val destjar = aarlibManaged / (aarlib.base + ".jar")
-        val timestamp = dest / ".timestamp"
+          // Check if the AAR lib is up to date
+          val dest = aarlibResourceManaged / aarlib.base
+          val destjar = aarlibManaged / (aarlib.base + ".jar")
+          val timestamp = dest / ".timestamp"
 
-        // Check if the AAR lib is up to date
-        if (timestamp.lastModified < aarlib.lastModified) {
+          // Check if the AAR lib is up to date
+          if (timestamp.lastModified < aarlib.lastModified) {
 
-          // Unzip the aarlib to a temporary directory
-          s.log.info("Extracting library " + aarlib.name)
-          val unzipped = IO.unzip(aarlib, dest)
+            // Unzip the aarlib to a temporary directory
+            s.log.info("Extracting library " + aarlib.name)
+            val unzipped = IO.unzip(aarlib, dest)
 
-          // Move the classres in place
-          IO.move(dest / "classes.jar", destjar)
+            // Move the classres in place
+            IO.move(dest / "classes.jar", destjar)
 
-          // Add a marker
-          IO.delete(timestamp)
-          new java.io.PrintWriter(timestamp, "UTF-8").close
+            // Add a marker
+            IO.delete(timestamp)
+            new java.io.PrintWriter(timestamp, "UTF-8").close
+          }
+
+          // Read the package name from the manifest
+          val manifest = dest / "AndroidManifest.xml"
+          val pkgName = XML.loadFile(manifest).attribute("package").get.head.text
+
+          // Return a LibraryProject instance with some info about this aarLib
+          LibraryProject(
+            pkgName,
+            manifest,
+            Set(destjar),
+            Some(dest / "res") filter { _.exists },
+            Some(dest / "assets") filter { _.exists }
+          )
         }
-
-        // Read the package name from the manifest
-        val manifest = dest / "AndroidManifest.xml"
-        val pkgName = XML.loadFile(manifest).attribute("package").get.head.text
-
-        // Return a LibraryProject instance with some info about this aarLib
-        LibraryProject(
-          pkgName,
-          manifest,
-          Set(destjar),
-          Some(dest / "res") filter { _.exists },
-          Some(dest / "assets") filter { _.exists }
-        )
       }
-    }
   }
 
   private def apklibDependenciesTask =
@@ -199,87 +200,13 @@ object AndroidBase {
 
     (mPackage, aPath, mPath, rPath, jarPath, javaPath, proGen, aarlibs, apklibs, apklibJavaPath, s, useDebug) =>
 
-    // Create the managed Java path if necessary
-    javaPath.mkdirs
-
-    // Arguments for resource directories
-    val libraryResPathArgs = rPath.flatMap(p => Seq("-S", p.absolutePath))
-
-    // Arguments for library assets
-    val extlibs = apklibs ++ aarlibs
-    val libraryAssetPathArgs = for (
-      lib <- extlibs;
-      d <- lib.assetsDir.toSeq;
-      arg <- Seq("-A", d.absolutePath)
-    ) yield arg
-
-    def runAapt(`package`: String, outJavaPath: File, args: String*) {
-      s.log.info("Running AAPT for package " + `package`)
-
-      val aapt = Seq(aPath.absolutePath, "package", "--auto-add-overlay", "-m",
-        "--custom-package", `package`,
-        "-M", mPath.head.absolutePath,
-        "-I", jarPath.absolutePath,
-        "-J", outJavaPath.absolutePath,
-        "-G", proGen.absolutePath) ++
-        args ++
-        libraryResPathArgs ++
-        libraryAssetPathArgs
-
-      if (aapt.run(false).exitValue != 0) sys.error("error generating resources")
-    }
-
-    // Run aapt to generate resources for the main package
-    runAapt(mPackage, javaPath)
-
-    // Run aapt to generate resources for each apklib dependency
-    apklibs.foreach(lib => runAapt(lib.pkgName, apklibJavaPath, "--non-constant-id"))
-
-    def createBuildConfig(`package`: String) = {
-      var path = javaPath
-      `package`.split('.').foreach { path /= _ }
-      path.mkdirs
-      val buildConfig = path / "BuildConfig.java"
-      IO.write(buildConfig, """
-        package %s;
-        public final class BuildConfig {
-          public static final boolean DEBUG = %s;
-        }""".format(`package`, useDebug))
-      buildConfig
-    }
-
-    (javaPath ** "R.java" get) ++
-    (apklibJavaPath ** "R.java" get) ++
-      Seq(createBuildConfig(mPackage)) ++
-      apklibs.map(lib => createBuildConfig(lib.pkgName))
+    AAPT(mPackage,aPath,mPath,rPath,jarPath,javaPath,proGen,aarlibs,apklibs,apklibJavaPath,useDebug)
   }
 
   private def aidlGenerateTask =
     (sourceDirectories, idlPath, platformPath, managedJavaPath, javaSource, streams) map {
     (sDirs, idPath, platformPath, javaPath, jSource, s) =>
-    val aidlPaths = sDirs.map(_ ** "*.aidl").reduceLeft(_ +++ _).get
-    if (aidlPaths.isEmpty) {
-      s.log.debug("No AIDL files found, skipping")
-      Nil
-    } else {
-      val processor = aidlPaths.map { ap =>
-        idPath.absolutePath ::
-          "-p" + (platformPath / "framework.aidl").absolutePath ::
-          "-o" + javaPath.absolutePath ::
-          "-I" + jSource.absolutePath ::
-          ap.absolutePath :: Nil
-      }.foldLeft(None.asInstanceOf[Option[ProcessBuilder]]) { (f, s) =>
-        f match {
-          case None => Some(s)
-          case Some(first) => Some(first #&& s)
-        }
-      }.get
-      s.log.debug("generating aidl "+processor)
-      processor !
-
-      val rPath = javaPath ** "R.java"
-      javaPath ** "*.java" --- (rPath) get
-    }
+      AIDL(sDirs,idPath,platformPath,javaPath,jSource)
   }
 
   def findPath() = (manifestPath) map { p =>

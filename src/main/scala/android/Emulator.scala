@@ -44,12 +44,13 @@ object AndroidEmulator {
     emulatorStart <<= InputTask((sdkPath)(installedAvds(_)))(emulatorStartTask),
     emulatorStop <<= emulatorStopTask
   ))
-
+  
+/*  TODO: Fix this
   lazy val aggregateSettings: Seq[Setting[_]] = Seq(
     listDevices,
     emulatorStart,
     emulatorStop
   ) map { aggregate in _ := false }
-
-  lazy val settings: Seq[Setting[_]] = baseSettings ++ aggregateSettings
+*/
+  lazy val settings: Seq[Setting[_]] = baseSettings //++ aggregateSettings
 }
