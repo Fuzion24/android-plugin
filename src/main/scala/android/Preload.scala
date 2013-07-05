@@ -5,6 +5,8 @@ import Keys._
 import AndroidPlugin._
 import AndroidHelpers._
 
+import scala.util.Try
+
 import scala.xml._
 import scala.xml.transform._
 
@@ -49,7 +51,7 @@ object AndroidPreload {
         val tags = libraries map { _.usesTag }
 
         // Update the element
-        Elem(namespace, "application", attribs, scope, children ++ tags: _*)
+        Elem(namespace, "application", attribs, scope, false, children ++ tags: _*)
       }
 
       case other => other
@@ -84,8 +86,7 @@ object AndroidPreload {
 
     // Parse the library file
     val preloadedFile = (
-      try { Some(XML.loadString(permissions) \\ "permissions" \\ "library" \\ "@file") }
-      catch { case _ => None }
+      Try { XML.loadString(permissions) \\ "permissions" \\ "library" \\ "@file" }.toOption
 
     // Convert the XML node to a String
     ).map(_.text)
@@ -118,9 +119,9 @@ object AndroidPreload {
     s.log.info("Setting permissions for " + library.fullName)
 
     // Generate string from the XML
-    val xmlString = scala.xml.Utility.toXML(
+    val xmlString = scala.xml.Utility.serialize(
       scala.xml.Utility.trim(library.permissionTag),
-      minimizeTags=true
+      minimizeTags=scala.xml.MinimizeMode.Always
     ).toString.replace("\"", "\\\"")
 
     // Load the file on the device
